@@ -91,3 +91,57 @@ fn derive_gpu_encode_impl(input: DeriveInput) -> Result<TokenStream, Error> {
     })
     .into()
 }
+
+#[proc_macro_derive(GpuDecode)]
+pub fn derive_gpu_decode(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+
+    derive_gpu_decode_impl(input)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
+fn derive_gpu_decode_impl(input: DeriveInput) -> Result<TokenStream, Error> {
+    let data = if let Data::Struct(data) = input.data {
+        data
+    } else {
+        return Err(Error::new_spanned(
+            input,
+            "#[derive(GpuDecode)] may only be used on structs",
+        ));
+    };
+
+    let ident = input.ident;
+
+    let body = match data.fields {
+        syn::Fields::Named(fields) => {
+            let inner = fields.named.iter().map(|field| {
+                let name = field.ident.as_ref().unwrap();
+                let ty = &field.ty;
+                quote! {
+                    #name: <#ty as wgpu_struct::GpuDecode>::decode(decoder)?,
+                }
+            });
+            quote! { Self { #(#inner)* } }
+        }
+        syn::Fields::Unnamed(fields) => {
+            let inner = fields.unnamed.iter().map(|field| {
+                let ty = &field.ty;
+                quote! {
+                    <#ty as wgpu_struct::GpuDecode>::decode(decoder)?,
+                }
+            });
+            quote! { Self (#(#inner)*) }
+        }
+        syn::Fields::Unit => quote! { Self },
+    };
+
+    Ok(quote! {
+        impl wgpu_struct::GpuDecode for #ident {
+            fn decode(decoder: &mut wgpu_struct::GpuDecoder<impl std::io::Read>) -> std::io::Result<Self> {
+                decoder.struct_align::<Self>(|decoder| Ok(#body))
+            }
+        }
+    })
+    .into()
+}

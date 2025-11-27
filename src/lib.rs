@@ -3,7 +3,7 @@ use smallvec::{SmallVec, smallvec};
 use std::io::{ErrorKind, Read, Result, Write};
 
 #[cfg(feature = "wgpu_struct_derive")]
-pub use wgpu_struct_derive::{GpuEncode, GpuLayout};
+pub use wgpu_struct_derive::{GpuDecode, GpuEncode, GpuLayout};
 
 #[cfg(feature = "wgpu_struct_derive")]
 pub mod __internal {
@@ -355,7 +355,7 @@ mod tests {
         assert_eq!(encoded.len(), 48);
     }
 
-    #[derive(GpuLayout, GpuEncode)]
+    #[derive(GpuLayout, GpuEncode, GpuDecode, PartialEq, Eq, Debug)]
     struct SimpleStruct {
         a: u32,
         b: u32,
@@ -369,7 +369,7 @@ mod tests {
         assert_eq!(encoded.len(), 8);
     }
 
-    #[derive(GpuLayout, GpuEncode)]
+    #[derive(GpuLayout, GpuEncode, GpuDecode, PartialEq, Eq, Debug)]
     struct AlignedStruct {
         a: u32,
         b: (u32, u32, u32),
@@ -386,7 +386,7 @@ mod tests {
         assert_eq!(encoded.len(), 32);
     }
 
-    #[derive(GpuLayout, GpuEncode)]
+    #[derive(GpuLayout, GpuEncode, GpuDecode, PartialEq, Eq, Debug)]
     struct PackingStruct {
         a: (u32, u32, u32),
         b: u32,
@@ -422,5 +422,38 @@ mod tests {
         let data = words!(u32, 4321, 1234, 3412, 0, 9999, 8888, 7777, 0);
         let encoded = gpu_decode::<Vec<(u32, u32, u32)>>(Cursor::new(data)).unwrap();
         assert_eq!(encoded, vec![(4321, 1234, 3412), (9999, 8888, 7777)]);
+    }
+
+    #[test]
+    fn decodes_simple_struct() {
+        let data = words!(u32, 4321, 1234);
+        let encoded = gpu_decode::<SimpleStruct>(Cursor::new(data)).unwrap();
+        assert_eq!(encoded, SimpleStruct { a: 4321, b: 1234 });
+    }
+
+    #[test]
+    fn decodes_aligned_struct() {
+        let data = words!(u32, 4321, 0, 0, 0, 9999, 8888, 7777, 0);
+        let encoded = gpu_decode::<AlignedStruct>(Cursor::new(data)).unwrap();
+        assert_eq!(
+            encoded,
+            AlignedStruct {
+                a: 4321,
+                b: (9999, 8888, 7777),
+            }
+        );
+    }
+
+    #[test]
+    fn decodes_packing_struct() {
+        let data = words!(u32, 9999, 8888, 7777, 4321);
+        let encoded = gpu_decode::<PackingStruct>(Cursor::new(data)).unwrap();
+        assert_eq!(
+            encoded,
+            PackingStruct {
+                a: (9999, 8888, 7777),
+                b: 4321,
+            }
+        );
     }
 }
