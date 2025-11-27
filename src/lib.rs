@@ -81,7 +81,7 @@ macro_rules! impl_simple_primitives {
             impl GpuEncode for $type {
                 fn encode(&self, encoder: &mut GpuEncoder<impl Write>) -> Result<()> {
                     encoder.align_to(Self::ALIGNMENT)?;
-                    encoder.write_all(bytemuck::bytes_of(self))
+                    encoder.write_all(&self.to_le_bytes())
                 }
             }
         )*
@@ -214,24 +214,37 @@ mod tests {
         pub use crate::*;
     }
 
+    macro_rules! words {
+        ($ty: ty, $($v:expr),*) => {
+            [$(<$ty>::to_le_bytes($v),)*].as_flattened()
+        };
+    }
+
+    #[test]
+    fn encodes_u32() {
+        let encoded = gpu_encode(vec![], &0xabcd1234_u32).unwrap();
+        assert_eq!(&encoded, &[0x34, 0x12, 0xcd, 0xab]);
+        assert_eq!(encoded.len(), 4);
+    }
+
     #[test]
     fn encodes_vec2() {
         let encoded = gpu_encode(vec![], &(0.5, 0.2)).unwrap();
-        assert_eq!(&encoded, bytemuck::bytes_of(&[0.5_f32, 0.2]));
+        assert_eq!(&encoded, words!(f32, 0.5, 0.2));
         assert_eq!(encoded.len(), 8);
     }
 
     #[test]
     fn encodes_vec3() {
         let encoded = gpu_encode(vec![], &(0.5, 0.2, 0.3)).unwrap();
-        assert_eq!(&encoded, bytemuck::bytes_of(&[0.5_f32, 0.2, 0.3, 0.0]));
+        assert_eq!(&encoded, words!(f32, 0.5, 0.2, 0.3, 0.0));
         assert_eq!(encoded.len(), 16);
     }
 
     #[test]
     fn encodes_vec4() {
         let encoded = gpu_encode(vec![], &(0.5, 0.2, 0.3, 0.8)).unwrap();
-        assert_eq!(&encoded, bytemuck::bytes_of(&[0.5_f32, 0.2, 0.3, 0.8]));
+        assert_eq!(&encoded, words!(f32, 0.5, 0.2, 0.3, 0.8));
         assert_eq!(encoded.len(), 16);
     }
 
@@ -241,9 +254,9 @@ mod tests {
             gpu_encode(vec![], &((0.9, 0.8, 0.7), (0.6, 0.5, 0.4), (0.3, 0.2, 0.1))).unwrap();
         assert_eq!(
             &encoded,
-            bytemuck::bytes_of(&[
-                0.9_f32, 0.8, 0.7, 0.0, 0.6, 0.5, 0.4, 0.0, 0.3, 0.2, 0.1, 0.0
-            ])
+            words!(
+                f32, 0.9, 0.8, 0.7, 0.0, 0.6, 0.5, 0.4, 0.0, 0.3, 0.2, 0.1, 0.0
+            )
         );
         assert_eq!(encoded.len(), 48);
     }
@@ -258,7 +271,7 @@ mod tests {
     fn encodes_simple_struct() {
         let value = SimpleStruct { a: 4321, b: 1234 };
         let encoded = gpu_encode(vec![], &value).unwrap();
-        assert_eq!(&encoded, bytemuck::bytes_of(&[4321_u32, 1234]));
+        assert_eq!(&encoded, words!(u32, 4321, 1234));
         assert_eq!(encoded.len(), 8);
     }
 
@@ -275,10 +288,7 @@ mod tests {
             b: (9999, 8888, 7777),
         };
         let encoded = gpu_encode(vec![], &value).unwrap();
-        assert_eq!(
-            &encoded,
-            bytemuck::bytes_of(&[4321_u32, 0, 0, 0, 9999, 8888, 7777, 0])
-        );
+        assert_eq!(&encoded, words!(u32, 4321, 0, 0, 0, 9999, 8888, 7777, 0));
         assert_eq!(encoded.len(), 32);
     }
 
@@ -295,7 +305,7 @@ mod tests {
             b: 4321,
         };
         let encoded = gpu_encode(vec![], &value).unwrap();
-        assert_eq!(&encoded, bytemuck::bytes_of(&[9999, 8888, 7777, 4321]));
+        assert_eq!(&encoded, words!(u32, 9999, 8888, 7777, 4321));
         assert_eq!(encoded.len(), 16);
     }
 }
