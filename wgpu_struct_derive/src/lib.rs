@@ -33,7 +33,19 @@ fn derive_gpu_layout_impl(input: DeriveInput) -> Result<TokenStream, Error> {
     Ok(quote! {
         impl wgpu_struct::GpuLayout for #ident {
             const ALIGNMENT: usize = #alignment;
-            const SIZE: Option<usize> = Some(0_usize #( + < #field_tys as wgpu_struct::GpuLayout >::SIZE.unwrap() )*);
+            // const SIZE: Option<usize> = Some(0_usize #( + < #field_tys as wgpu_struct::GpuLayout >::SIZE.unwrap() )*);
+            const SIZE: Option<usize> = {
+                let mut size: usize = 0;
+
+                #(
+                    size = size.next_multiple_of(<#field_tys as wgpu_struct::GpuLayout>::ALIGNMENT);
+                    size += <#field_tys as wgpu_struct::GpuLayout>::SIZE.unwrap();
+                )*
+
+                size = size.next_multiple_of(Self::ALIGNMENT);
+
+                Some(size)
+            };
         }
         const _: Option<usize> = <#ident as wgpu_struct::GpuLayout>::SIZE;
     })
