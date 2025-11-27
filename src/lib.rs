@@ -13,28 +13,98 @@ pub mod __internal {
     }
 }
 
+/// A trait for [host-sharable](https://www.w3.org/TR/WGSL/#host-shareable-types)
+/// types that have a defined alignment and optional size.
+///
+/// Usually this trait should not be implemented directly, but instead should be
+/// implemented using the derive macro.
+///
+/// Structs deriving this trait should not include members who's size is not known at runtime.
+///
+/// # Examples
+///
+/// ```
+/// # use wgpu_struct::GpuLayout;
+/// #[derive(GpuLayout)]
+/// struct Sphere {
+///     radius: f32,
+///     origin: (f32, f32, f32),
+/// }
+///
+/// # fn main() {
+/// assert_eq!(Sphere::ALIGNMENT, 16);
+/// assert_eq!(Sphere::SIZE, Some(32));
+/// # }
+/// ```
+///
+/// ```compile_fail
+/// # use wgpu_struct::GpuLayout;
+/// #[derive(GpuLayout)]
+/// struct PointCloud {
+///     points: Vec<(f32, f32, f32)>, // Vec doesn't define a const size
+/// }
+/// ```
 pub trait GpuLayout {
+    /// The alignment in bytes of the type
     const ALIGNMENT: usize;
+
+    /// The size in bytes of the type or `None` if the type's size is only known at
+    /// runtime (e.g. `Vec<T>` and `&[T]`)
     const SIZE: Option<usize>;
 }
 
+/// A trait for types that can be encoded as a wgsl value and sent to the gpu.
+///
+/// Usually this trait should not be implemented directly, but instead should be
+/// implemented using the derive macro.
+///
+/// # Examples
+///
+/// ```
+/// # use wgpu_struct::{GpuLayout, GpuEncode};
+/// #[derive(GpuLayout, GpuEncode)]
+/// struct Sphere {
+///     radius: f32,
+///     origin: (f32, f32, f32),
+/// }
+/// ```
 pub trait GpuEncode: GpuLayout {
+    /// Encodes self for wgsl and writes it to the encoder buffer
     fn encode(&self, encoder: &mut GpuEncoder<impl Write>) -> Result<()>;
 }
 
+/// A trait for types that can be recieved form the gpu and decoded from a wgsl
+/// value.
+///
+/// Usually this trait should not be implemented directly, but instead should be
+/// implemented using the derive macro.
+///
+/// # Examples
+///
+/// ```
+/// # use wgpu_struct::{GpuLayout, GpuDecode};
+/// #[derive(GpuLayout, GpuDecode)]
+/// struct Sphere {
+///     radius: f32,
+///     origin: (f32, f32, f32),
+/// }
+/// ```
 pub trait GpuDecode: GpuLayout
 where
     Self: Sized,
 {
+    /// Reads self from the decoder buffer and decodes it.
     fn decode(decoder: &mut GpuDecoder<impl Read>) -> Result<Self>;
 }
 
+/// The state for encoding values for wgsl
 pub struct GpuEncoder<W: Write> {
     buffer: W,
     written: usize,
     align: usize,
 }
 
+/// The state for decoding values from wgsl
 pub struct GpuDecoder<R: Read> {
     buffer: R,
     read: usize,
@@ -49,6 +119,8 @@ impl<W: Write> GpuEncoder<W> {
         }
     }
 
+    /// Adds zero-initialized padding such that the next write call will be
+    /// aligned to the given value.
     pub fn align_to(&mut self, align: usize) -> Result<()> {
         self.align = self.align.max(align);
         let padding = self.written.next_multiple_of(align) - self.written;
@@ -61,13 +133,15 @@ impl<W: Write> GpuEncoder<W> {
         self.write_all(&padding)
     }
 
+    /// Writes to the buffer
     pub fn write_all(&mut self, buf: &[u8]) -> Result<()> {
         self.buffer.write_all(buf)?;
         self.written += buf.len();
         Ok(())
     }
 
-    pub fn struct_align<T: GpuEncode>(
+    /// Aligns and pads based on the [wgsl structure alignment specification](https://www.w3.org/TR/WGSL/#structure-member-layout)
+    pub fn struct_align<T: GpuLayout>(
         &mut self,
         f: impl FnOnce(&mut Self) -> Result<()>,
     ) -> Result<()> {
@@ -88,6 +162,8 @@ impl<R: Read> GpuDecoder<R> {
         GpuDecoder { buffer, read: 0 }
     }
 
+    /// Consumes and discards padding such that the next read call will be
+    /// aligned to the given value.
     pub fn aligned_to(&mut self, align: usize) -> Result<()> {
         let padding = self.read.next_multiple_of(align) - self.read;
 
@@ -99,13 +175,15 @@ impl<R: Read> GpuDecoder<R> {
         self.read_all(&mut padding)
     }
 
+    /// Reads from the buffer
     pub fn read_all(&mut self, buf: &mut [u8]) -> Result<()> {
         self.buffer.read_exact(buf)?;
         self.read += buf.len();
         Ok(())
     }
 
-    pub fn struct_align<T: GpuEncode>(
+    /// Aligns and pads based on the [wgsl structure alignment specification](https://www.w3.org/TR/WGSL/#structure-member-layout)
+    pub fn struct_align<T: GpuLayout>(
         &mut self,
         f: impl FnOnce(&mut Self) -> Result<T>,
     ) -> Result<T> {
@@ -289,13 +367,41 @@ impl<T: GpuDecode, const N: usize> GpuDecode for [T; N] {
     }
 }
 
-pub fn gpu_decode<T: GpuDecode>(container: impl Read) -> Result<T> {
-    let mut decoder = GpuDecoder::new(container);
+/// Decodes the given type from the given buffer. Returns the decoded value.
+///
+/// # Examples
+/// ```
+/// # use wgpu_struct::{GpuLayout, gpu_decode};
+/// # use std::io::Cursor;
+///
+/// # fn main() -> std::io::Result<()> {
+/// let data = [0, 0, 0, 63, 205, 204, 76, 62, 154, 153, 153, 62, 0, 0, 0, 0];
+/// let result = gpu_decode::<(f32, f32, f32)>(Cursor::new(&data))?;
+/// assert_eq!(result, (0.5, 0.2, 0.3));
+/// # Ok(())
+/// # }
+/// ```
+pub fn gpu_decode<T: GpuDecode>(buffer: impl Read) -> Result<T> {
+    let mut decoder = GpuDecoder::new(buffer);
     T::decode(&mut decoder)
 }
 
-pub fn gpu_encode<T: GpuEncode, W: Write>(container: W, value: &T) -> Result<W> {
-    let mut encoder = GpuEncoder::new(container);
+/// Encodes the given type into the given buffer. Returns modified buffer.
+///
+/// # Examples
+/// ```
+/// # use wgpu_struct::{GpuLayout, gpu_encode};
+/// # use std::io::Cursor;
+///
+/// # fn main() -> std::io::Result<()> {
+/// let value = (0.5, 0.2, 0.3);
+/// let result = gpu_encode(Vec::new(), &value)?;
+/// assert_eq!(&result, &[0, 0, 0, 63, 205, 204, 76, 62, 154, 153, 153, 62, 0, 0, 0, 0]);
+/// # Ok(())
+/// # }
+/// ```
+pub fn gpu_encode<T: GpuEncode, W: Write>(buffer: W, value: &T) -> Result<W> {
+    let mut encoder = GpuEncoder::new(buffer);
     value.encode(&mut encoder)?;
     encoder.end()
 }
