@@ -5,6 +5,7 @@ use std::io::{ErrorKind, Read, Result, Write};
 #[cfg(feature = "wgpu_struct_derive")]
 pub use wgpu_struct_derive::{GpuDecode, GpuEncode, GpuLayout};
 
+#[doc(hidden)]
 #[cfg(feature = "wgpu_struct_derive")]
 pub mod __internal {
     pub const fn max(a: usize, b: usize) -> usize {
