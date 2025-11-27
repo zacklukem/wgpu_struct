@@ -195,3 +195,29 @@ pub fn gpu_encode<T: GpuEncode, W: Write>(container: W, value: &T) -> Result<W> 
     value.encode(&mut encoder)?;
     encoder.end()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encodes_vec2() {
+        let encoded = gpu_encode(vec![], &(0.5, 0.2)).unwrap();
+        assert_eq!(&encoded, bytemuck::bytes_of(&[0.5_f32, 0.2]));
+        assert_eq!(encoded.len(), 8);
+    }
+
+    #[test]
+    fn encodes_vec3() {
+        let encoded = gpu_encode(vec![], &(0.5, 0.2, 0.3)).unwrap();
+        assert_eq!(&encoded, bytemuck::bytes_of(&[0.5_f32, 0.2, 0.3, 0.0]));
+        assert_eq!(encoded.len(), 16);
+    }
+
+    #[test]
+    fn encodes_vec4() {
+        let encoded = gpu_encode(vec![], &(0.5, 0.2, 0.3, 0.8)).unwrap();
+        assert_eq!(&encoded, bytemuck::bytes_of(&[0.5_f32, 0.2, 0.3, 0.8]));
+        assert_eq!(encoded.len(), 16);
+    }
+}
