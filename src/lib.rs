@@ -1,6 +1,16 @@
 use smallvec::{SmallVec, smallvec};
 use std::io::{Result, Write};
 
+#[cfg(feature = "wgpu_struct_derive")]
+pub use wgpu_struct_derive::{GpuEncode, GpuLayout};
+
+#[cfg(feature = "wgpu_struct_derive")]
+pub mod __internal {
+    pub const fn max(a: usize, b: usize) -> usize {
+        if a < b { b } else { a }
+    }
+}
+
 pub trait GpuLayout {
     const ALIGNMENT: usize;
     const SIZE: Option<usize>;
@@ -44,7 +54,7 @@ impl<W: Write> GpuEncoder<W> {
         Ok(())
     }
 
-    pub fn aligned_to<T: GpuEncode>(
+    pub fn struct_align<T: GpuEncode>(
         &mut self,
         f: impl FnOnce(&mut Self) -> Result<()>,
     ) -> Result<()> {
@@ -70,7 +80,8 @@ macro_rules! impl_simple_primitives {
 
             impl GpuEncode for $type {
                 fn encode(&self, encoder: &mut GpuEncoder<impl Write>) -> Result<()> {
-                    encoder.aligned_to::<Self>(|encoder| encoder.write_all(bytemuck::bytes_of(self)))
+                    encoder.align_to(Self::ALIGNMENT)?;
+                    encoder.write_all(bytemuck::bytes_of(self))
                 }
             }
         )*
@@ -93,13 +104,12 @@ macro_rules! impl_vectors {
 
             impl GpuEncode for $type {
                 fn encode(&self, encoder: &mut GpuEncoder<impl Write>) -> Result<()> {
-                    encoder.aligned_to::<Self>(|encoder| {
-                        let ($($i,)*) = self;
-                        $(
-                            $i.encode(encoder)?;
-                        )*
-                        Ok(())
-                    })
+                    encoder.align_to(Self::ALIGNMENT)?;
+                    let ($($i,)*) = self;
+                    $(
+                        $i.encode(encoder)?;
+                    )*
+                    Ok(())
                 }
             }
         )*
@@ -154,7 +164,7 @@ impl<T: GpuEncode> GpuEncode for Vec<T> {
         for item in self {
             item.encode(encoder)?;
         }
-        Ok(())
+        encoder.align_to(Self::ALIGNMENT)
     }
 }
 
@@ -168,7 +178,7 @@ impl<T: GpuEncode> GpuEncode for &[T] {
         for item in *self {
             item.encode(encoder)?;
         }
-        Ok(())
+        encoder.align_to(Self::ALIGNMENT)
     }
 }
 
@@ -186,7 +196,7 @@ impl<T: GpuEncode, const N: usize> GpuEncode for [T; N] {
         for item in self {
             item.encode(encoder)?;
         }
-        Ok(())
+        encoder.align_to(Self::ALIGNMENT)
     }
 }
 
@@ -199,6 +209,16 @@ pub fn gpu_encode<T: GpuEncode, W: Write>(container: W, value: &T) -> Result<W> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod wgpu_struct {
+        pub use crate::*;
+    }
+
+    #[derive(GpuLayout, GpuEncode)]
+    struct X {
+        a: u32,
+        b: u32,
+    }
 
     #[test]
     fn encodes_vec2() {

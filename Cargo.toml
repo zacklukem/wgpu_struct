@@ -1,8 +1,16 @@
+[workspace]
+members = ["./wgpu_struct_derive"]
+
 [package]
-name = "wgpu-struct"
+name = "wgpu_struct"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 bytemuck = { version = "1.24.0", features = ["derive"] }
 smallvec = "1.15.1"
+wgpu_struct_derive = { optional = true, path = "./wgpu_struct_derive" }
+
+[features]
+default = ["derive"]
+derive = ["wgpu_struct_derive"]
