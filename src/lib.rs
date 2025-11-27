@@ -36,6 +36,7 @@ impl<W: Write> GpuEncoder<W> {
     }
 
     pub fn align_to(&mut self, align: usize) -> Result<()> {
+        self.align = self.align.max(align);
         let padding = self.written.next_multiple_of(align) - self.written;
 
         if padding == 0 {
@@ -44,7 +45,6 @@ impl<W: Write> GpuEncoder<W> {
 
         let padding: SmallVec<[u8; 16]> = smallvec![0; padding];
         self.write_all(&padding)?;
-        self.align = self.align.max(align);
         Ok(())
     }
 
@@ -267,5 +267,22 @@ mod tests {
             bytemuck::bytes_of(&[4321_u32, 0, 0, 0, 9999, 8888, 7777, 0])
         );
         assert_eq!(encoded.len(), 32);
+    }
+
+    #[derive(GpuLayout, GpuEncode)]
+    struct PackingStruct {
+        a: (u32, u32, u32),
+        b: u32,
+    }
+
+    #[test]
+    fn encodes_packing_struct() {
+        let value = PackingStruct {
+            a: (9999, 8888, 7777),
+            b: 4321,
+        };
+        let encoded = gpu_encode(vec![], &value).unwrap();
+        assert_eq!(&encoded, bytemuck::bytes_of(&[9999, 8888, 7777, 4321]));
+        assert_eq!(encoded.len(), 16);
     }
 }
