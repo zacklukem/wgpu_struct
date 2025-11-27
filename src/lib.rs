@@ -1,3 +1,72 @@
+//! A wgsl data encoding and decoding library.
+//!
+//! Because the layout of data types in wgsl differs from c or rust representation,
+//! explicit handling of converting between host and gpu types is required. This
+//! crate provides that functionality by serializing and deserializing data coming
+//! to and from the gpu.
+//!
+//! # Supported data types
+//!
+//! This crate supports the following wgsl datatypes:
+//!  * `u32`, `i32`, `f32`
+//!    > Matches rust values
+//!  * `vecN<f32>`, `vecN<i32>`, `vecN<u32>`
+//!    > Equivilant to rust tuples
+//!  * `matCxR<f32>`, `matCxR<i32>`, `matCxR<u32>`
+//!    > Equivilant to rust nested tuples
+//!  * `array<E, N>`
+//!    > Equivilant to `[E; N]`
+//!  * `array<E>`
+//!    > Equivilant to `Vec<E>` (Or `&[E]` for encoding only)
+//!  * Custom structs
+//!    > Using [`GpuEncode`] and [`GpuDecode`] derive macros
+//!
+//! # Examples
+//!
+//! ```
+//! # use wgpu_struct::{GpuLayout, GpuEncode, gpu_encode, gpu_decode};
+//! # use std::io::Cursor;
+//! #[derive(GpuLayout, GpuEncode)]
+//! struct Sphere {
+//!     radius: f32,
+//!     origin: (f32, f32, f32),
+//! }
+//!
+//! # fn main() -> std::io::Result<()> {
+//! let data = vec![
+//!     Sphere {
+//!         radius: 1.0,
+//!         origin: (1.0, 2.0, 3.0),
+//!     },
+//!     Sphere {
+//!         radius: 2.0,
+//!         origin: (4.0, 5.0, 6.0),
+//!     },
+//! ];
+//!
+//! let buffer = gpu_encode(Vec::new(), &data)?;
+//!
+//! // [...] handle the buffer with the gpu here
+//!
+//! # let gpu_output: [u8; _] = [
+//! #     1, 0, 0, 0,
+//! #     2, 0, 0, 0,
+//! #     3, 0, 0, 0,
+//! #     0, 0, 0, 0,
+//! #     4, 0, 0, 0,
+//! #     5, 0, 0, 0,
+//! #     6, 0, 0, 0,
+//! #     0, 0, 0, 0,
+//! # ];
+//! let result = gpu_decode::<Vec<(u32, u32, u32)>>(Cursor::new(&gpu_output))?;
+//! assert_eq!(result, vec![(1, 2, 3), (4, 5, 6)]);
+//!
+//! # Ok(())
+//! # }
+//! ```
+
+#![deny(missing_docs)]
+
 use arrayvec::ArrayVec;
 use smallvec::{SmallVec, smallvec};
 use std::io::{ErrorKind, Read, Result, Write};
@@ -264,6 +333,11 @@ impl_vectors! {
     (f32, f32, f32), (a, b, c), 16, 12;
     (f32, f32, f32, f32), (a, b, c, d), 16, 16;
 
+    // vec*i
+    (i32, i32), (a, b), 8, 8;
+    (i32, i32, i32), (a, b, c), 16, 12;
+    (i32, i32, i32, i32), (a, b, c, d), 16, 16;
+
     // vec*u
     (u32, u32), (a, b), 8, 8;
     (u32, u32, u32), (a, b, c), 16, 12;
@@ -281,6 +355,19 @@ impl_vectors! {
     ((f32, f32, f32), (f32, f32, f32), (f32, f32, f32), (f32, f32, f32)), (a, b, c, d), 16, 64; // mat4x3
     ((f32, f32, f32, f32), (f32, f32, f32, f32), (f32, f32, f32, f32)), (a, b, c), 16, 48; // mat3x4
     ((f32, f32, f32, f32), (f32, f32, f32, f32), (f32, f32, f32, f32), (f32, f32, f32, f32)), (a, b, c, d), 16, 64; // mat4x4
+
+    // mat*i
+    ((i32, i32), (i32, i32)), (a, b), 8, 16; // mat2x2
+
+    ((i32, i32), (i32, i32), (i32, i32)), (a, b, c), 8, 24; // mat3x2
+    ((i32, i32, i32), (i32, i32, i32)), (a, b), 16, 32; // mat2x3
+    ((i32, i32, i32), (i32, i32, i32), (i32, i32, i32)), (a, b, c), 16, 48; // mat3x3
+
+    ((i32, i32), (i32, i32), (i32, i32), (i32, i32)), (a, b, c, d), 8, 32; // mat4x2
+    ((i32, i32, i32, i32), (i32, i32, i32, i32)), (a, b), 16, 32; // mat2x4
+    ((i32, i32, i32), (i32, i32, i32), (i32, i32, i32), (i32, i32, i32)), (a, b, c, d), 16, 64; // mat4x3
+    ((i32, i32, i32, i32), (i32, i32, i32, i32), (i32, i32, i32, i32)), (a, b, c), 16, 48; // mat3x4
+    ((i32, i32, i32, i32), (i32, i32, i32, i32), (i32, i32, i32, i32), (i32, i32, i32, i32)), (a, b, c, d), 16, 64; // mat4x4
 
     // mat*u
     ((u32, u32), (u32, u32)), (a, b), 8, 16; // mat2x2
