@@ -235,6 +235,19 @@ mod tests {
         assert_eq!(encoded.len(), 16);
     }
 
+    #[test]
+    fn encodes_mat3x3() {
+        let encoded =
+            gpu_encode(vec![], &((0.9, 0.8, 0.7), (0.6, 0.5, 0.4), (0.3, 0.2, 0.1))).unwrap();
+        assert_eq!(
+            &encoded,
+            bytemuck::bytes_of(&[
+                0.9_f32, 0.8, 0.7, 0.0, 0.6, 0.5, 0.4, 0.0, 0.3, 0.2, 0.1, 0.0
+            ])
+        );
+        assert_eq!(encoded.len(), 48);
+    }
+
     #[derive(GpuLayout, GpuEncode)]
     struct SimpleStruct {
         a: u32,
