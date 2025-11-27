@@ -214,12 +214,6 @@ mod tests {
         pub use crate::*;
     }
 
-    #[derive(GpuLayout, GpuEncode)]
-    struct X {
-        a: u32,
-        b: u32,
-    }
-
     #[test]
     fn encodes_vec2() {
         let encoded = gpu_encode(vec![], &(0.5, 0.2)).unwrap();
@@ -239,5 +233,39 @@ mod tests {
         let encoded = gpu_encode(vec![], &(0.5, 0.2, 0.3, 0.8)).unwrap();
         assert_eq!(&encoded, bytemuck::bytes_of(&[0.5_f32, 0.2, 0.3, 0.8]));
         assert_eq!(encoded.len(), 16);
+    }
+
+    #[derive(GpuLayout, GpuEncode)]
+    struct SimpleStruct {
+        a: u32,
+        b: u32,
+    }
+
+    #[test]
+    fn encodes_simple_struct() {
+        let value = SimpleStruct { a: 4321, b: 1234 };
+        let encoded = gpu_encode(vec![], &value).unwrap();
+        assert_eq!(&encoded, bytemuck::bytes_of(&[4321_u32, 1234]));
+        assert_eq!(encoded.len(), 8);
+    }
+
+    #[derive(GpuLayout, GpuEncode)]
+    struct AlignedStruct {
+        a: u32,
+        b: (u32, u32, u32),
+    }
+
+    #[test]
+    fn encodes_aligned_struct() {
+        let value = AlignedStruct {
+            a: 4321,
+            b: (9999, 8888, 7777),
+        };
+        let encoded = gpu_encode(vec![], &value).unwrap();
+        assert_eq!(
+            &encoded,
+            bytemuck::bytes_of(&[4321_u32, 0, 0, 0, 9999, 8888, 7777, 0])
+        );
+        assert_eq!(encoded.len(), 32);
     }
 }
