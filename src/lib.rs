@@ -1,5 +1,6 @@
+use arrayvec::ArrayVec;
 use smallvec::{SmallVec, smallvec};
-use std::io::{Result, Write};
+use std::io::{ErrorKind, Read, Result, Write};
 
 #[cfg(feature = "wgpu_struct_derive")]
 pub use wgpu_struct_derive::{GpuEncode, GpuLayout};
@@ -20,10 +21,22 @@ pub trait GpuEncode: GpuLayout {
     fn encode(&self, encoder: &mut GpuEncoder<impl Write>) -> Result<()>;
 }
 
+pub trait GpuDecode: GpuLayout
+where
+    Self: Sized,
+{
+    fn decode(decoder: &mut GpuDecoder<impl Read>) -> Result<Self>;
+}
+
 pub struct GpuEncoder<W: Write> {
     buffer: W,
     written: usize,
     align: usize,
+}
+
+pub struct GpuDecoder<R: Read> {
+    buffer: R,
+    read: usize,
 }
 
 impl<W: Write> GpuEncoder<W> {
@@ -44,8 +57,7 @@ impl<W: Write> GpuEncoder<W> {
         }
 
         let padding: SmallVec<[u8; 16]> = smallvec![0; padding];
-        self.write_all(&padding)?;
-        Ok(())
+        self.write_all(&padding)
     }
 
     pub fn write_all(&mut self, buf: &[u8]) -> Result<()> {
@@ -70,6 +82,39 @@ impl<W: Write> GpuEncoder<W> {
     }
 }
 
+impl<R: Read> GpuDecoder<R> {
+    fn new(buffer: R) -> Self {
+        GpuDecoder { buffer, read: 0 }
+    }
+
+    pub fn aligned_to(&mut self, align: usize) -> Result<()> {
+        let padding = self.read.next_multiple_of(align) - self.read;
+
+        if padding == 0 {
+            return Ok(());
+        }
+
+        let mut padding: SmallVec<[u8; 16]> = smallvec![0; padding];
+        self.read_all(&mut padding)
+    }
+
+    pub fn read_all(&mut self, buf: &mut [u8]) -> Result<()> {
+        self.buffer.read_exact(buf)?;
+        self.read += buf.len();
+        Ok(())
+    }
+
+    pub fn struct_align<T: GpuEncode>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T>,
+    ) -> Result<T> {
+        self.aligned_to(T::ALIGNMENT)?;
+        let r = f(self)?;
+        self.aligned_to(T::ALIGNMENT)?;
+        Ok(r)
+    }
+}
+
 macro_rules! impl_simple_primitives {
     ($($type:ty, $align:expr, $size:expr;)*) => {
         $(
@@ -84,6 +129,15 @@ macro_rules! impl_simple_primitives {
                     encoder.write_all(&self.to_le_bytes())
                 }
             }
+
+            impl GpuDecode for $type {
+                fn decode(decoder: &mut GpuDecoder<impl Read>) -> Result<Self> {
+                    decoder.aligned_to(Self::ALIGNMENT)?;
+                    let mut buf = [0_u8; $size];
+                    decoder.read_all(&mut buf)?;
+                    Ok(Self::from_le_bytes(buf))
+                }
+            }
         )*
     };
 }
@@ -95,14 +149,14 @@ impl_simple_primitives! {
 }
 
 macro_rules! impl_vectors {
-    ($($type:ty, ($($i:ident),*), $align:expr, $size:expr;)*) => {
+    ($(($($types:ty),*), ($($i:ident),*), $align:expr, $size:expr;)*) => {
         $(
-            impl GpuLayout for $type {
+            impl GpuLayout for ($($types,)*) {
                 const ALIGNMENT: usize = $align;
                 const SIZE: Option<usize> = Some($size);
             }
 
-            impl GpuEncode for $type {
+            impl GpuEncode for ($($types,)*) {
                 fn encode(&self, encoder: &mut GpuEncoder<impl Write>) -> Result<()> {
                     encoder.align_to(Self::ALIGNMENT)?;
                     let ($($i,)*) = self;
@@ -110,6 +164,15 @@ macro_rules! impl_vectors {
                         $i.encode(encoder)?;
                     )*
                     Ok(())
+                }
+            }
+
+            impl GpuDecode for ($($types,)*) {
+                fn decode(decoder: &mut GpuDecoder<impl Read>) -> Result<Self> {
+                    decoder.aligned_to(Self::ALIGNMENT)?;
+                    Ok(($(
+                        <$types as GpuDecode>::decode(decoder)?,
+                    )*))
                 }
             }
         )*
@@ -168,6 +231,21 @@ impl<T: GpuEncode> GpuEncode for Vec<T> {
     }
 }
 
+impl<T: GpuDecode> GpuDecode for Vec<T> {
+    fn decode(decoder: &mut GpuDecoder<impl Read>) -> Result<Self> {
+        let mut items = Vec::new();
+        loop {
+            let v = match T::decode(decoder) {
+                Err(e) if e.kind() == ErrorKind::UnexpectedEof => break,
+                Err(e) => return Err(e),
+                Ok(v) => v,
+            };
+            items.push(v);
+        }
+        Ok(items)
+    }
+}
+
 impl<T: GpuLayout> GpuLayout for &[T] {
     const ALIGNMENT: usize = T::ALIGNMENT;
     const SIZE: Option<usize> = None;
@@ -200,6 +278,21 @@ impl<T: GpuEncode, const N: usize> GpuEncode for [T; N] {
     }
 }
 
+impl<T: GpuDecode, const N: usize> GpuDecode for [T; N] {
+    fn decode(decoder: &mut GpuDecoder<impl Read>) -> Result<Self> {
+        let mut items = ArrayVec::<T, N>::new();
+        for _ in 0..N {
+            items.push(T::decode(decoder)?);
+        }
+        Ok(items.into_inner().unwrap_or_else(|_| unreachable!()))
+    }
+}
+
+pub fn gpu_decode<T: GpuDecode>(container: impl Read) -> Result<T> {
+    let mut decoder = GpuDecoder::new(container);
+    T::decode(&mut decoder)
+}
+
 pub fn gpu_encode<T: GpuEncode, W: Write>(container: W, value: &T) -> Result<W> {
     let mut encoder = GpuEncoder::new(container);
     value.encode(&mut encoder)?;
@@ -209,6 +302,7 @@ pub fn gpu_encode<T: GpuEncode, W: Write>(container: W, value: &T) -> Result<W> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     mod wgpu_struct {
         pub use crate::*;
@@ -216,7 +310,7 @@ mod tests {
 
     macro_rules! words {
         ($ty: ty, $($v:expr),*) => {
-            [$(<$ty>::to_le_bytes($v),)*].as_flattened()
+            Vec::from([$(<$ty>::to_le_bytes($v),)*].as_flattened())
         };
     }
 
@@ -230,21 +324,21 @@ mod tests {
     #[test]
     fn encodes_vec2() {
         let encoded = gpu_encode(vec![], &(0.5, 0.2)).unwrap();
-        assert_eq!(&encoded, words!(f32, 0.5, 0.2));
+        assert_eq!(encoded, words!(f32, 0.5, 0.2));
         assert_eq!(encoded.len(), 8);
     }
 
     #[test]
     fn encodes_vec3() {
         let encoded = gpu_encode(vec![], &(0.5, 0.2, 0.3)).unwrap();
-        assert_eq!(&encoded, words!(f32, 0.5, 0.2, 0.3, 0.0));
+        assert_eq!(encoded, words!(f32, 0.5, 0.2, 0.3, 0.0));
         assert_eq!(encoded.len(), 16);
     }
 
     #[test]
     fn encodes_vec4() {
         let encoded = gpu_encode(vec![], &(0.5, 0.2, 0.3, 0.8)).unwrap();
-        assert_eq!(&encoded, words!(f32, 0.5, 0.2, 0.3, 0.8));
+        assert_eq!(encoded, words!(f32, 0.5, 0.2, 0.3, 0.8));
         assert_eq!(encoded.len(), 16);
     }
 
@@ -253,7 +347,7 @@ mod tests {
         let encoded =
             gpu_encode(vec![], &((0.9, 0.8, 0.7), (0.6, 0.5, 0.4), (0.3, 0.2, 0.1))).unwrap();
         assert_eq!(
-            &encoded,
+            encoded,
             words!(
                 f32, 0.9, 0.8, 0.7, 0.0, 0.6, 0.5, 0.4, 0.0, 0.3, 0.2, 0.1, 0.0
             )
@@ -271,7 +365,7 @@ mod tests {
     fn encodes_simple_struct() {
         let value = SimpleStruct { a: 4321, b: 1234 };
         let encoded = gpu_encode(vec![], &value).unwrap();
-        assert_eq!(&encoded, words!(u32, 4321, 1234));
+        assert_eq!(encoded, words!(u32, 4321, 1234));
         assert_eq!(encoded.len(), 8);
     }
 
@@ -288,7 +382,7 @@ mod tests {
             b: (9999, 8888, 7777),
         };
         let encoded = gpu_encode(vec![], &value).unwrap();
-        assert_eq!(&encoded, words!(u32, 4321, 0, 0, 0, 9999, 8888, 7777, 0));
+        assert_eq!(encoded, words!(u32, 4321, 0, 0, 0, 9999, 8888, 7777, 0));
         assert_eq!(encoded.len(), 32);
     }
 
@@ -305,7 +399,28 @@ mod tests {
             b: 4321,
         };
         let encoded = gpu_encode(vec![], &value).unwrap();
-        assert_eq!(&encoded, words!(u32, 9999, 8888, 7777, 4321));
+        assert_eq!(encoded, words!(u32, 9999, 8888, 7777, 4321));
         assert_eq!(encoded.len(), 16);
+    }
+
+    #[test]
+    fn decodes_u32() {
+        let data = &[0x34, 0x12, 0xcd, 0xab];
+        let result = gpu_decode::<u32>(Cursor::new(data)).unwrap();
+        assert_eq!(result, 0xabcd1234);
+    }
+
+    #[test]
+    fn decodes_vec3() {
+        let data = words!(f32, 0.5, 0.2, 0.3, 0.0);
+        let result = gpu_decode::<(f32, f32, f32)>(Cursor::new(data)).unwrap();
+        assert_eq!(result, (0.5, 0.2, 0.3));
+    }
+
+    #[test]
+    fn decodes_vec() {
+        let data = words!(u32, 4321, 1234, 3412, 0, 9999, 8888, 7777, 0);
+        let encoded = gpu_decode::<Vec<(u32, u32, u32)>>(Cursor::new(data)).unwrap();
+        assert_eq!(encoded, vec![(4321, 1234, 3412), (9999, 8888, 7777)]);
     }
 }
