@@ -1,8 +1,5 @@
 use smallvec::{SmallVec, smallvec};
-use std::{
-    io::{Result, Write},
-    mem,
-};
+use std::io::{Result, Write};
 
 pub trait GpuLayout {
     const ALIGNMENT: usize;
@@ -47,11 +44,13 @@ impl<W: Write> GpuEncoder<W> {
         Ok(())
     }
 
-    pub fn struct_scope(&mut self, f: impl FnOnce(&mut Self) -> Result<()>) -> Result<()> {
-        let prev_align = mem::replace(&mut self.align, 1);
+    pub fn aligned_to<T: GpuEncode>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<()>,
+    ) -> Result<()> {
+        self.align_to(T::ALIGNMENT)?;
         f(self)?;
-        let struct_align = mem::replace(&mut self.align, prev_align);
-        self.align_to(struct_align)?;
+        self.align_to(T::ALIGNMENT)?;
         Ok(())
     }
 
@@ -71,8 +70,7 @@ macro_rules! impl_simple_primitives {
 
             impl GpuEncode for $type {
                 fn encode(&self, encoder: &mut GpuEncoder<impl Write>) -> Result<()> {
-                    encoder.align_to(Self::ALIGNMENT)?;
-                    encoder.write_all(bytemuck::bytes_of(self))
+                    encoder.aligned_to::<Self>(|encoder| encoder.write_all(bytemuck::bytes_of(self)))
                 }
             }
         )*
@@ -95,12 +93,13 @@ macro_rules! impl_vectors {
 
             impl GpuEncode for $type {
                 fn encode(&self, encoder: &mut GpuEncoder<impl Write>) -> Result<()> {
-                    encoder.align_to(Self::ALIGNMENT)?;
-                    let ($($i,)*) = self;
-                    $(
-                        $i.encode(encoder)?;
-                    )*
-                    encoder.align_to(Self::ALIGNMENT)
+                    encoder.aligned_to::<Self>(|encoder| {
+                        let ($($i,)*) = self;
+                        $(
+                            $i.encode(encoder)?;
+                        )*
+                        Ok(())
+                    })
                 }
             }
         )*
@@ -191,8 +190,8 @@ impl<T: GpuEncode, const N: usize> GpuEncode for [T; N] {
     }
 }
 
-pub fn gpu_encode_vec<T: GpuEncode>(value: &T) -> Vec<u8> {
-    let mut encoder = GpuEncoder::new(Vec::new());
-    value.encode(&mut encoder).unwrap();
-    encoder.end().unwrap()
+pub fn gpu_encode<T: GpuEncode, W: Write>(container: W, value: &T) -> Result<W> {
+    let mut encoder = GpuEncoder::new(container);
+    value.encode(&mut encoder)?;
+    encoder.end()
 }
