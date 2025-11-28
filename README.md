@@ -24,15 +24,12 @@ This crate supports the following wgsl datatypes:
 ## Examples
 
 ```
-# use wgpu_struct::{GpuLayout, GpuEncode, gpu_encode, gpu_decode};
-# use std::io::Cursor;
 #[derive(GpuLayout, GpuEncode)]
 struct Sphere {
     radius: f32,
     origin: (f32, f32, f32),
 }
 
-# fn main() -> std::io::Result<()> {
 let data = vec![
     Sphere {
         radius: 1.0,
@@ -48,19 +45,6 @@ let buffer = gpu_encode(Vec::new(), &data)?;
 
 // [...] handle the buffer with the gpu here
 
-# let gpu_output: [u8; _] = [
-#     1, 0, 0, 0,
-#     2, 0, 0, 0,
-#     3, 0, 0, 0,
-#     0, 0, 0, 0,
-#     4, 0, 0, 0,
-#     5, 0, 0, 0,
-#     6, 0, 0, 0,
-#     0, 0, 0, 0,
-# ];
 let result = gpu_decode::<Vec<(u32, u32, u32)>>(Cursor::new(&gpu_output))?;
 assert_eq!(result, vec![(1, 2, 3), (4, 5, 6)]);
-
-# Ok(())
-# }
 ```
