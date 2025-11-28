@@ -1,3 +1,5 @@
+# wgpu_struct
+
 A wgsl data encoding and decoding library.
 
 Because the layout of data types in wgsl differs from c or rust representation,
@@ -23,7 +25,7 @@ This crate supports the following wgsl datatypes:
 
 ## Examples
 
-```
+```rust
 #[derive(GpuLayout, GpuEncode)]
 struct Sphere {
     radius: f32,
@@ -47,4 +49,5 @@ let buffer = gpu_encode(Vec::new(), &data)?;
 
 let result = gpu_decode::<Vec<(u32, u32, u32)>>(Cursor::new(&gpu_output))?;
 assert_eq!(result, vec![(1, 2, 3), (4, 5, 6)]);
+
 ```
