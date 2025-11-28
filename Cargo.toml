@@ -5,6 +5,8 @@ members = ["./wgpu_struct_derive"]
 name = "wgpu_struct"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "A wgsl data encoding and decoding library"
 
 [dependencies]
 arrayvec = "0.7.6"

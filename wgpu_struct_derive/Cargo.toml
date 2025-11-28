@@ -2,6 +2,8 @@
 name = "wgpu_struct_derive"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "Macros for wgpu_struct"
 
 [lib]
 proc-macro = true
